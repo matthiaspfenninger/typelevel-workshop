@@ -14,7 +14,7 @@ object adts {
   // Design a data type for a chess piece and its position on the chess board
   type ChessPiece = Unit
 
-  // Write a function using pattern mathcing that takes a square and returns whether it can move there or not
+  // Write a function using pattern matching that takes a square and returns whether it can move there or not
 
   // Model a data type that stores time spans
   type TimeSpan = Unit
@@ -72,6 +72,9 @@ object adts {
   sealed trait SizeTwo
   final case object One extends SizeTwo
   final case object Two extends SizeTwo
+
+  //Arbitraty proofs can also be done
+  def optEither[A]:Iso[Option[A],Either[A,Unit]]=???
 
   //Think about the sizes involved
   def arbitraryProof: Iso[Either[Either[Unit, Boolean], Either[Unit, Size]], Either[SizeTwo, Either[Boolean, Size]]] = Iso(
