@@ -121,6 +121,8 @@ object typeclasses {
 
   @typeclass trait Functor[F[_]] {
     def map[A, B](fa: F[A])(f: A => B): F[B]
+    //you can implement fmap directly here in the trait. It is just very handy to build an intuition about "Functors move functions into an effect"
+    def fmap[A,B](f: A => B):F[A] => F[B] = ???
   }
 
   implicit def optionFunctor: Functor[Option] = ???
