@@ -218,34 +218,65 @@ object typeclasses {
 
   @typeclass trait Functor[F[_]] {
     def map[A, B](fa: F[A])(f: A => B): F[B]
+
     //you can implement fmap directly here in the trait. It is just very handy to build an intuition about "Functors move functions into an effect"
-    def fmap[A,B](f: A => B):F[A] => F[B] = ???
+    def fmap[A, B](f: A => B):F[A] => F[B] = fa => map(fa)(f)
   }
 
-  implicit def optionFunctor: Functor[Option] = ???
+  implicit def optionFunctor: Functor[Option] = new Functor[Option] {
+    def map[A, B](fa: Option[A])(f: A => B): Option[B] = fa match {
+      case Some(value) => Some(f(value))
+      case None => None
+    }
+  }
 
-  implicit def listFunctor: Functor[List] = ???
+  implicit def listFunctor: Functor[List] = new Functor[List] {
+    def map[A, B](fa: List[A])(f: A => B): List[B] = fa match {
+      case head :: tl => f(head) :: map(tl)(f)
+      case Nil => Nil
+    }
+  }
 
+  // an example of what the above actually enables
+  val listExample = listFunctor.map(List(1,2,3,4,5))(_ + 5)
+
+  // the useful thing is that functors compose. you can do things like the following (we would need to also implement compose for that)
+  /*
+  val optionListFunctor = Functor[List].compose[Option]
+  optionListFunctor.map(List(Option(2), Option(10), None))(_ + 10)
+  */
+
+  // go with the cats library if you want to use it in a real life use case
+  /*
+  import cats.Functor
+  import cats.implicits._
+  val listOption = List(Some(1), None, Some(2))
+  Functor[List].compose[Option].map(listOption)(_ + 1)
+  */
 
 
   sealed trait Tree[+A]
   case class Branch[A](left: Tree[A], right: Tree[A]) extends Tree[A]
   case class Leaf[A](value: A) extends Tree[A]
 
-  implicit def treeFunctor: Functor[Tree] = ???
+  implicit def treeFunctor: Functor[Tree] = new Functor[Tree] {
+    def map[A, B](fa: Tree[A])(f: A => B): Tree[B] = fa match {
+      case Branch(left, right) => Branch(map(left)(f), map(right)(f))
+      case Leaf(value) => Leaf(f(value))
+    }
+  }
 
 
 
-
-
-
-  //Cardinality
+  // CARDINALITY
 
   @typeclass trait Cardinality[A] {
     def cardinality: BigInt
   }
 
-  implicit def cardinalityUnit: Cardinality[Unit] = ???
+  implicit def cardinalityUnit: Cardinality[Unit] = new Cardinality[Unit] {
+    def cardinality: BigInt = 1
+  }
 
   implicit def cardinalityBoolean: Cardinality[Boolean] = ???
 
@@ -261,9 +292,9 @@ object typeclasses {
 
   implicit def cardinalitySize: Cardinality[Size] = ???
 
-  implicit def cardinalityNothing: Cardinality[Nothing]= ???
+  implicit def cardinalityNothing: Cardinality[Nothing]= ??? // 0 (because you cannot instantiate a 0)
 
-  implicit def cardinalityFunction[A: Cardinality, B: Cardinality]: Cardinality[A => B] = ???
+  implicit def cardinalityFunction[A: Cardinality, B: Cardinality]: Cardinality[A => B] = ??? // pow(B.cardinality, A.cardinality)
 
 
 
