@@ -318,8 +318,8 @@ object abstractions {
   // and unpacking it via value gets you:       Future  - Validated  - List         (calling .value)
 
 
-  // a covariant functor provides a     map that gets you from A to B knowing the A->B projection
-  // a contravariant functor provides a map that gets you from A to B knowing the B->A projection
+  // a covariant functor provides a     map that gets you from A to B knowing the A->B projection (produces A)
+  // a contravariant functor provides a map that gets you from A to B knowing the B->A projection (consumes A)
   @typeclass trait ContravariantFunctor[F[_]] {
     def contramap[A, B](fa: F[A])(f: B => A): F[B]
   }
