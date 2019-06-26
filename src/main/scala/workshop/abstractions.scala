@@ -11,10 +11,9 @@ import adts.Iso
 
 object abstractions {
 
-
   // Multiplicative Monoidal Functors
 
-  @typeclass trait Monoidal[F[_]] extends Functor[F] {
+  @typeclass trait Monoidal[F[_]] extends Functor[F] { self => 
     def product[A, B](fa: F[A], fb: F[B]): F[(A, B)]
 
     def unit: F[Unit]
@@ -25,7 +24,18 @@ object abstractions {
 
     def map2[A, B, C](fa: F[A], fb: F[B])(f: (A, B) => C): F[C] =
       map(product(fa, fb)) { case (a, b) => f(a, b) }
+
+    // NOTE: monoidals compose (not like monoids), which is also why you can use flatMap on monoidals and not on monoids
+    // example: Future(Option(Int)) + Future(Option(String)) => Future(Option(Int, String))
+    def compose[G[_]:Monoidal] : Monoidal[λ[X => F[G[X]]]] = new Monoidal[λ[X => F[G[X]]]]{ // λ can also be written as Lambda
+      def unit: F[G[Unit]] = self.pure(Monoidal[G].unit)
+      def map[A, B](fga: F[G[A]])(f: A => B): F[G[B]] = self.map(fga)(ga => ga.map(f))
+      def product[A, B](fga: F[G[A]], fgb: F[G[B]]): F[G[(A, B)]] = self.map2(fga, fgb)((ga, gb) => Monoidal[G].product(ga, gb))
+    }
   }
+
+  // NOTE: self is needed if you want to access the functions of this level in an inner level
+  // if you would use Monoidal[F] instead, you are using the definition inside the definition itself, could lead to endless recursion
 
   // explanation that these structures are usually called APPLICATIVE and proof that it's the same:
 
@@ -68,8 +78,13 @@ object abstractions {
     }
   }
 
-  // TODO
-  implicit def futureMonoidal: Monoidal[Future] = ???
+  implicit def futureMonoidal: Monoidal[Future] = new Monoidal[Future] {
+    def product[A, B](fa: Future[A], fb: Future[B]): Future[(A, B)] = fa.zip(fb)
+
+    def unit: Future[Unit] = Future.successful(())
+
+    def map[A, B](fa: Future[A])(f: A => B): Future[B] = fa.map(f)
+  }
 
   implicit def listMonoidal: Monoidal[List] = new Monoidal[List] {
     def product[A, B](fa: List[A], fb: List[B]): List[(A, B)] = fa match {
@@ -247,9 +262,14 @@ object abstractions {
   // To do so, you should use the `User.validate` function.
   // Once your done, you can check the difference to Either
 
-  def allUsers = model.userList1 ++ model.userList2
-  val validatedUsers = allUsers.traverse(model.User.validate)
-  // NOTE: if you would use 'map', then you get a list of Validated, but you want a Validated of a list
+  def allUsers: List[String] = model.userList1 ++ model.userList2 // userList1: all valid - userList2: all invalid
+  val validatedUsers: ValidatedList[String, List[User]] = allUsers.traverse(model.User.validate) 
+
+  val validatedUsersRisky: ValidatedList[String, List[User]] = allUsers.map(model.User.validate).sequence 
+  // NOTE 1: functionally the same as above, but in some cases this can be much more expensive than the one above
+  // because you instantiate *all* of the entries. use traverse instead
+
+  // NOTE 2: if you would use 'map', then you get a list of Validated, but you want a Validated of a list
   // hence use 'traverse' instead of 'map'
 
 
@@ -257,28 +277,49 @@ object abstractions {
   // and return the UserReport for that user using the `User.fetchReport` function
   def reportForUser(u: String): Future[ValidatedList[String, UserReport]] = User.validate(u).traverse(User.fetchReport)
 
+  // HARD: Now get all reports for all the users
+  val allReports: Future[ValidatedList[String, List[UserReport]]] = allUsers.traverse(reportForUser).map(_.sequence)
+  
+  // NOTE: this has the inner functions flipped - you wan't a validated list of a userreport list
+  // and NOT a list of single validated userreports. hence you need to flip the inner part with map sequence (or traverse(identity))
+  val allReportsWrong: Future[List[ValidatedList[String, UserReport]]] = allUsers.traverse(reportForUser)
 
-  // Hard: Now get all reports for all the users
-  // TODO
-  def allReports = allUsers.traverse(reportForUser)
 
-
-
-
-  // Nested Monoidals
+  // NESTED MONOIDAL
 
   case class Nested[F[_], G[_], A](value: F[G[A]])
 
-  implicit def nestedMonoidal[F[_]: Monoidal, G[_]: Monoidal]: Monoidal[Nested[F, G, ?]] = ???
+  implicit def nestedMonoidal[F[_]: Monoidal, G[_]: Monoidal]: Monoidal[Nested[F, G, ?]] = new Monoidal[Nested[F, G, ?]] {
+
+    val fgcomposit = Monoidal[F].compose[G]
+
+    def product[A, B](fa: Nested[F,G,A], fb: Nested[F,G,B]): Nested[F,G,(A, B)] = Nested(fgcomposit.product(fa.value, fb.value))
+
+    def map[A, B](fa: Nested[F,G,A])(f: A => B): Nested[F,G,B] = Nested(fgcomposit.map(fa.value)(f))
+
+    def unit: Nested[F,G,Unit] = Nested(fgcomposit.unit)
+  }
 
 
   // Try implementing `allReports` using `Nested`, it should be much easier this way
-  def allReportsUsingNested: Future[ValidatedList[String, List[UserReport]]] = ???
+  def allReportsUsingNested: Future[ValidatedList[String, List[UserReport]]] = allUsers.traverse( u => Nested(reportForUser(u))).value
+  def allReportsUsingNestedWrong = allUsers.map( u => Nested(reportForUser(u)))
+
+  // EXPLANATIION: goal is to get:            List      - Future    - Validated
+
+  // FIRST WAY via traverse & map(sequence):
+  // if you use map(reportForUser):           List      - Future    - Validated       --> not what you want
+  // if you use traverse(reportForUser):      Future    - List      - Validated       (flipping the first pair)
+  // if you use map(_.sequence) on top:       Future    - Validated - List            (flipping the second pair)
+
+  // SECOND WAY via traverse & Nested:
+  // if you use map(Nested(reportForUser)):     List    - (Future    - Validated)
+  // so the traverse flips it like that:       (Future  - Validated) - List         (flipping tuple to the front)
+  // and unpacking it via value gets you:       Future  - Validated  - List         (calling .value)
 
 
-
-
-
+  // a covariant functor provides a     map that gets you from A to B knowing the A->B projection
+  // a contravariant functor provides a map that gets you from A to B knowing the B->A projection
   @typeclass trait ContravariantFunctor[F[_]] {
     def contramap[A, B](fa: F[A])(f: B => A): F[B]
   }
@@ -287,13 +328,34 @@ object abstractions {
 
   case class StringEncoder[A](run: A => String)
 
-  implicit def predicateContravariant: ContravariantFunctor[Predicate] = ???
+  implicit def predicateContravariant: ContravariantFunctor[Predicate] = new ContravariantFunctor[Predicate] {
+    def contramap[A, B](fa: Predicate[A])(f: B => A): Predicate[B] = Predicate[B](f andThen fa.run)
+  }
 
-  implicit def stringEncoderContravariant: ContravariantFunctor[StringEncoder] = ???
+  implicit def stringEncoderContravariant: ContravariantFunctor[StringEncoder] = new ContravariantFunctor[StringEncoder] {
+    def contramap[A, B](fa: StringEncoder[A])(f: B => A): StringEncoder[B] = StringEncoder[B](f andThen fa.run)
+  }
 
 
-  //THESE TWO INSTANCES ARE NOT POSSIBLE TO WRITE but looking at them can help form a better intuition about this. So if you're still a bit shaky try to implement them and see if you understand why it doesn't work
-  implicit def predFunctor:Functor[Predicate] = ???
+  // THESE TWO INSTANCES ARE NOT POSSIBLE TO WRITE but looking at them can help form a better intuition about this. 
+  // So if you're still a bit shaky try to implement them and see if you understand why it doesn't work
+  implicit def predFunctor:Functor[Predicate] = new Functor[Predicate] {
 
-  implicit def optContravar:ContravariantFunctor[Option] = ???
+    // you want: B -> bool
+    // you have: A -> bool / A -> B
+    // you need: A -> bool / B -> A, then you could build B -> A -> bool
+    def map[A, B](fa: Predicate[A])(f: A => B): Predicate[B] = ???  // not possible!
+  }
+
+  implicit def optContravar:ContravariantFunctor[Option] = new ContravariantFunctor[Option] {
+
+    // you want: Option(B)
+    // you have: Option(A) / B -> A
+    // you need: Option(A) / A -> B, then you could build {case Some(A) -> Some(B); case None -> None}
+    def contramap[A, B](fa: Option[A])(f: B => A): Option[B] = ??? // not possible!
+  }
 }
+
+// NOTE: contravariance and covariance for functions:
+// ARGUMENTS of functions are CONTRAvariant     / example: f(a) -> x  &  b -> a  ==>  f(b) -> x
+// RESULTS   of functions are COvariant         / example: f(a) -> x  &  x -> y  ==>  f(a) -> y
